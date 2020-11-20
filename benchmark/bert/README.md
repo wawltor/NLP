@@ -21,7 +21,7 @@ fleetrun --gpus 0,1,2,3 ./run_pretrain.py \
     --save_steps 20000 \
     --max_steps 100000000
 
-2. 如果是需要多单机多卡/多机多卡训练，则使用下面的命令进行训练
+2. 如果是需要单机打卡训练，则使用下面的命令进行训练
 export CUDA_VISIBLE_DEVICES=0
 python ./run_pretrain_single.py \
     --model_type bert \
