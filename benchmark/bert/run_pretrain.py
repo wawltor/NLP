@@ -199,7 +199,7 @@ def do_train(args):
                 max(1, num_training_steps - num_warmup_steps))))
 
     optimizer = paddle.optimizer.AdamW(
-        learning_rate=args.learning_rate,
+        learning_rate=lr_scheduler,
         epsilon=args.adam_epsilon,
         parameters=model.parameters(),
         weight_decay=args.weight_decay,
