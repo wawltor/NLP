@@ -1,0 +1,4 @@
+tokenizers
+visualdl
+jieba
+sentencepice
