@@ -19,7 +19,7 @@ fleetrun --gpus 0,1,2,3 ./run_pretrain.py \
     --output_dir ./tmp2/ \
     --logging_steps 1 \
     --save_steps 20000 \
-    --max_steps 100000000
+    --max_steps 1000000
 
 2. 如果是需要单机单卡训练，则使用下面的命令进行训练
 export CUDA_VISIBLE_DEVICES=0
@@ -36,5 +36,5 @@ python ./run_pretrain_single.py \
     --output_dir ./tmp2/ \
     --logging_steps 1 \
     --save_steps 20000 \
-    --max_steps 100000000
+    --max_steps 1000000
 ```

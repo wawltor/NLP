@@ -142,11 +142,12 @@ def reset_program_state_dict(model, state_dict):
 
     new_state_dict = dict()
     for n, p in state_dict.items():
-        dtype_str = "float32"
-        if str(p.dtype) == "VarType.FP64":
-            dtype_str = "float64"
-        new_state_dict[p.name] = np.random.normal(
-            loc=0.0, scale=scale, size=p.shape).astype(dtype_str)
+        if "layer_norm" not in p.name:
+            dtype_str = "float32"
+            if str(p.dtype) == "VarType.FP64":
+                dtype_str = "float64"
+            new_state_dict[p.name] = np.random.normal(
+                loc=0.0, scale=scale, size=p.shape).astype(dtype_str)
     return new_state_dict
 
 
