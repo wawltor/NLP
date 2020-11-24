@@ -1,4 +1,4 @@
-# BERT Benchmark with static mode
+# BERT Benchmark with Fleet API
 
 先配置运行环境
 export PYTHONPATH=/home/fangzeyang/PaddleNLP
