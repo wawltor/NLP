@@ -268,7 +268,9 @@ class PretrainedModel(Layer):
             logger.info("Weights from pretrained model not used in {}: {}".
                         format(model.__class__.__name__, unexpected_keys))
         model_to_load.set_state_dict(state_to_load)
-        return model
+        if paddle.in_dynamic_mode():
+            return model
+        return model, state_to_load
 
     def save_pretrained(self, save_directory):
         """
