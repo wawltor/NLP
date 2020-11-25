@@ -12,6 +12,6 @@ python -u ./run_glue.py \
     --logging_steps 20 \
     --save_steps 500 \
     --output_dir ./tmp/$TASK_NAME/ \
-    --use_fp16=true \
-    --scale_loss=128.0 \
-    --use_dynamic_loss_scaling=true \
+    --use_fp16 true \
+    --scale_loss 128.0 \
+    --use_dynamic_loss_scaling true \

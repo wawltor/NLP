@@ -28,6 +28,7 @@ from paddlenlp.data.batchify import Stack, Tuple, Pad
 from paddlenlp.transformers import BertForSequenceClassification, BertTokenizer
 
 import paddle.fluid as fluid
+from paddle.fluid import profiler
 
 FORMAT = '%(asctime)s-%(levelname)s: %(message)s'
 logging.basicConfig(level=logging.INFO, format=FORMAT)
@@ -364,11 +365,10 @@ def do_train(args):
                 p.name for n, p in model.named_parameters()
                if not any(nd in n for nd in ["bias", "norm"])
         ])
-        if args.use_fp16:
-            optimizer = paddle.fluid.contrib.mixed_precision.decorate(
-                optimizer,
-                init_loss_scaling=args.scale_loss,
-                use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
+        optimizer = paddle.fluid.contrib.mixed_precision.decorate(
+            optimizer,
+            init_loss_scaling=args.scale_loss,
+            use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
         optimizer.minimize(loss)
 
     # Create the metric pass for the validation
@@ -388,10 +388,36 @@ def do_train(args):
     paddle.static.set_program_state(main_program, reset_state_dict)
 
     global_step = 0
+
+    # construct fixed feeding data
+    seq_len = 48
+    label = np.random.randint(0, 2, [64, 1])  # batch_size = 64
+    input_ids = np.random.randint(0, 11000, [64, seq_len])
+    segment_ids = np.zeros([64, seq_len]).astype('int64')
+    batch = [{
+        'label': label,
+        'input_ids': input_ids,
+        'segment_ids': segment_ids
+    }]
+
     tic_train = time.time()
     for epoch in range(args.num_train_epochs):
-        for step, batch in enumerate(train_data_loader):
+        # remove data_loader
+        # for step, batch in enumerate(train_data_loader):
+        for step in range(1000):
             global_step += 1
+
+            # profiler
+            """
+            if step == 200:
+                # profiler.start_profiler("All")
+                fluid.core.nvprof_start()
+            if step == 210:
+                fluid.core.nvprof_stop()
+                # profiler.stop_profiler("total", "./profile")
+                return
+            """
+
             loss_return = exe.run(main_program, feed=batch, fetch_list=[loss])
             if global_step % args.logging_steps == 0:
                 logger.info(
@@ -400,6 +426,9 @@ def do_train(args):
                        args.logging_steps / (time.time() - tic_train)))
                 tic_train = time.time()
             lr_scheduler.step()
+
+            # don't do evaluation and don't save params
+            """
             if global_step % args.save_steps == 0:
                 # Validation pass, record the loss and metric 
                 evaluate(exe, metric, loss, correct, dev_program,
@@ -410,6 +439,7 @@ def do_train(args):
                     os.makedirs(output_dir)
                 paddle.fluid.io.save_params(exe, output_dir)
                 tokenizer.save_pretrained(output_dir)
+            """
 
 
 if __name__ == "__main__":
