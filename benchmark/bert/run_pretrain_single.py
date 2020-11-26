@@ -124,6 +124,11 @@ def parse_args():
         type=bool,
         default=False,
         help="Enable mixed precision training.")
+    parser.add_argument(
+        "--enable_addto",
+        type=bool,
+        default=False,
+        help="Whether to enable the addto strategy for gradient accumulation or not. This is only used for AMP training.")
     args = parser.parse_args()
     return args
 
@@ -133,6 +138,7 @@ def construct_compiled_program(main_program, loss):
     exec_strategy.num_threads = 1
     exec_strategy.num_iteration_per_drop_scope = 10000
     build_strategy = paddle.static.BuildStrategy()
+    build_strategy.enable_addto = args.enable_addto
     main_program = paddle.static.CompiledProgram(
         main_program).with_data_parallel(
             loss_name=loss.name,
