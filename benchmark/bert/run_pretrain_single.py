@@ -129,6 +129,16 @@ def parse_args():
         type=bool,
         default=False,
         help="Whether to enable the addto strategy for gradient accumulation or not. This is only used for AMP training.")
+    parser.add_argument(
+        "--scale_loss",
+        type=float,
+        default=1.0,
+        help="The value of scale_loss for fp16.")
+    parser.add_argument(
+        "--use_dynamic_loss_scaling",
+        type=bool,
+        default=True,
+        help="Whether to use dynamic loss scaling.")
     args = parser.parse_args()
     return args
 
@@ -218,8 +228,8 @@ def do_train(args):
     if args.use_amp:
         optimizer = paddle.fluid.contrib.mixed_precision.decorate(
             optimizer,
-            init_loss_scaling=128.0,
-            use_dynamic_loss_scaling=True)
+            init_loss_scaling=args.scale_loss,
+            use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
     optimizer.minimize(loss)
 
     # Define the Executor for running the static model
