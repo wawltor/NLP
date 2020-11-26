@@ -387,6 +387,17 @@ def do_train(args):
                                                 pretrained_state_dict)
     paddle.static.set_program_state(main_program, reset_state_dict)
 
+    exec_strategy = fluid.ExecutionStrategy()
+    exec_strategy.num_threads = 1
+    exec_strategy.num_iteration_per_drop_scope = 10000
+
+    build_strategy = fluid.BuildStrategy()
+
+    main_program = fluid.CompiledProgram(main_program).with_data_parallel(
+        loss_name=loss.name,
+        exec_strategy=exec_strategy,
+        build_strategy=build_strategy)
+
     global_step = 0
     tic_train = time.time()
     for epoch in range(args.num_train_epochs):
