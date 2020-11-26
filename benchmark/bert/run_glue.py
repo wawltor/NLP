@@ -21,6 +21,7 @@ from functools import partial
 
 import numpy as np
 import paddle
+import paddle.fluid as fluid
 from paddle.io import DataLoader
 
 from paddlenlp.datasets import SimpleDataset, GlueQNLI, GlueSST2
@@ -102,6 +103,21 @@ def parse_args():
         type=float,
         help="Epsilon for Adam optimizer.")
     parser.add_argument(
+        "--momentum_rate",
+        default=0.9,
+        type=float,
+        help="The value of momentum_rate.")
+    parser.add_argument(
+        "--l2_decay",
+        default=1e-4,
+        type=float,
+        help="The l2_decay parameter.")
+    parser.add_argument(
+        "--multi_precision",
+        default=False,
+        type=bool,
+        help="Whether to enable multi-precision training with fp16.")
+    parser.add_argument(
         "--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
     parser.add_argument(
         "--num_train_epochs",
@@ -131,6 +147,14 @@ def parse_args():
         help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for initialization")
+    parser.add_argument(
+        "--use_pure_fp16", type=bool, default=False, help="Whether to enable half precision training with pure fp16.")
+    parser.add_argument(
+        "--use_amp", type=bool, default=False, help="Whether to enable half precision training with AMP.")
+    parser.add_argument(
+        "--scale_loss", type=float, default=1.0, help="The value of scale_loss for fp16.")
+    parser.add_argument(
+        "--use_dynamic_loss_scaling", type=bool, default=True, help="Whether to use dynamic loss scaling.")
     args = parser.parse_args()
     return args
 
@@ -143,6 +167,17 @@ def create_data_holder():
     label = paddle.static.data(name="label", shape=[-1, 1], dtype="int64")
 
     return [input_ids, segment_ids, label]
+
+
+def get_gpu_num():
+    visible_device = os.getenv('CUDA_VISIBLE_DEVICES')
+    if visible_device:
+        device_num = len(visible_device.split(','))
+    else:
+        device_num = subprocess.check_output(
+            [str.encode('nvidia-smi'), str.encode('-L')]).decode('utf-8').count(
+                '\n')
+    return device_num
 
 
 def reset_program_state_dict(model, state_dict, pretrained_state_dict):
@@ -278,9 +313,12 @@ def do_train(args):
 
     train_dataset = SimpleDataset(train_dataset).apply(trans_func, lazy=True)
 
+    use_tensor_core = False
+    if args.use_amp or args.use_pure_fp16:
+        use_tensor_core = True
     batchify_fn = lambda samples, fn=Tuple(
-        Pad(axis=0, pad_val=tokenizer.pad_token_id),  # input
-        Pad(axis=0, pad_val=tokenizer.pad_token_id),  # segment
+        Pad(axis=0, pad_val=tokenizer.pad_token_id, use_tensor_core=use_tensor_core),  # input
+        Pad(axis=0, pad_val=tokenizer.pad_token_id, use_tensor_core=use_tensor_core),  # segment
         Stack(dtype="int64" if train_dataset.get_labels() else "float32")  # label
     ): [data for i, data in enumerate(fn(samples))]
 
@@ -321,7 +359,9 @@ def do_train(args):
             num_classes=len(train_dataset.get_labels()))
         loss_fct = paddle.nn.loss.CrossEntropyLoss(
         ) if train_dataset.get_labels() else paddle.nn.loss.MSELoss()
-        logits = model(input_ids, segment_ids)
+        logits = model(input_ids, segment_ids, use_pure_fp16=args.use_pure_fp16)
+        if args.use_pure_fp16:
+            logits = fluid.layers.cast(logits, "float32")
         loss = loss_fct(logits, labels)
         dev_program = main_program.clone(for_test=True)
 
@@ -338,19 +378,24 @@ def do_train(args):
                0.0,
                float(num_training_steps - current_step) / float(
                   max(1, num_training_steps - num_warmup_steps))))
-        optimizer = paddle.optimizer.AdamW(
+        rescale_grad = 1.0 / (args.batch_size / get_gpu_num())
+        optimizer = fluid.contrib.optimizer.Momentum(
             learning_rate=lr_scheduler,
-            epsilon=args.adam_epsilon,
-            parameters=model.parameters(),
-            weight_decay=args.weight_decay,
-            apply_decay_param_fun=lambda x: x in [
-                p.name for n, p in model.named_parameters()
-               if not any(nd in n for nd in ["bias", "norm"])
-        ])
+            momentum=args.momentum_rate,
+            regularization=fluid.regularizer.L2Decay(args.l2_decay),
+            multi_precision=args.multi_precision,
+            rescale_grad=rescale_grad)
+        if args.use_amp:
+            optimizer = paddle.fluid.contrib.mixed_precision.decorate(
+                optimizer,
+                init_loss_scaling=args.scale_loss,
+                use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
         optimizer.minimize(loss)
 
     # Create the metric pass for the validation
     with paddle.static.program_guard(dev_program, startup_program):
+        if args.use_amp:
+            logits = paddle.cast(logits, 'float32')
         metric = metric_class()
         correct = metric.compute(logits, labels)
 
@@ -363,6 +408,17 @@ def do_train(args):
     reset_state_dict = reset_program_state_dict(model, state_dict,
                                                 pretrained_state_dict)
     paddle.static.set_program_state(main_program, reset_state_dict)
+
+    exec_strategy = fluid.ExecutionStrategy()
+    exec_strategy.num_threads = 1
+    exec_strategy.num_iteration_per_drop_scope = 10000
+
+    build_strategy = fluid.BuildStrategy()
+
+    main_program = fluid.CompiledProgram(main_program).with_data_parallel(
+                 loss_name=loss.name,
+                 exec_strategy=exec_strategy,
+                 build_strategy=build_strategy)
 
     global_step = 0
     tic_train = time.time()
