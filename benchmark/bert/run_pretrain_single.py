@@ -216,7 +216,7 @@ def do_train(args):
             if not any(nd in n for nd in ["bias", "norm"])
         ])
     if args.use_amp:
-        optimizer = paddle.fluid.contrib.decorate(
+        optimizer = paddle.fluid.contrib.mixed_precision.decorate(
             optimizer,
             init_loss_scaling=128.0,
             use_dynamic_loss_scaling=True)
