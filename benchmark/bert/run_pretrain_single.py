@@ -119,6 +119,16 @@ def parse_args():
         help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for initialization")
+    parser.add_argument(
+        "--use_amp",
+        type=bool,
+        default=False,
+        help="Enable mixed precision training.")
+    parser.add_argument(
+        "--enable_addto",
+        type=bool,
+        default=False,
+        help="Whether to enable the addto strategy for gradient accumulation or not. This is only used for AMP training.")
     args = parser.parse_args()
     return args
 
@@ -128,6 +138,7 @@ def construct_compiled_program(main_program, loss):
     exec_strategy.num_threads = 1
     exec_strategy.num_iteration_per_drop_scope = 10000
     build_strategy = paddle.static.BuildStrategy()
+    build_strategy.enable_addto = args.enable_addto
     main_program = paddle.static.CompiledProgram(
         main_program).with_data_parallel(
             loss_name=loss.name,
@@ -171,9 +182,10 @@ def do_train(args):
     args.model_type = args.model_type.lower()
     model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-    model = BertForPreTraining(
-        BertModel(**model_class.pretrained_init_configuration[
-            args.model_name_or_path]))
+    config = model_class.pretrained_init_configuration[args.model_name_or_path]
+    if config["vocab_size"] % 8 != 0:
+        config["vocab_size"] += 8 - (config["vocab_size"] % 8)
+    model = BertForPreTraining(BertModel(**config))
     criterion = BertPretrainingCriterion(model.bert.config["vocab_size"])
     prediction_scores, seq_relationship_score = model(
         input_ids=input_ids,
@@ -203,6 +215,11 @@ def do_train(args):
             p.name for n, p in model.named_parameters()
             if not any(nd in n for nd in ["bias", "norm"])
         ])
+    if args.use_amp:
+        optimizer = paddle.fluid.contrib.mixed_precision.decorate(
+            optimizer,
+            init_loss_scaling=128.0,
+            use_dynamic_loss_scaling=True)
     optimizer.minimize(loss)
 
     # Define the Executor for running the static model
