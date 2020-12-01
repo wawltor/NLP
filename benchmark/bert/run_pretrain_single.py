@@ -14,6 +14,7 @@
 
 import argparse
 import collections
+import distutils.util
 import itertools
 import os
 import random
@@ -121,12 +122,12 @@ def parse_args():
         "--seed", type=int, default=42, help="Random seed for initialization")
     parser.add_argument(
         "--use_amp",
-        type=bool,
+        type=distutils.util.strtobool,
         default=False,
         help="Enable mixed precision training.")
     parser.add_argument(
         "--enable_addto",
-        type=bool,
+        type=distutils.util.strtobool,
         default=False,
         help="Whether to enable the addto strategy for gradient accumulation or not. This is only used for AMP training.")
     parser.add_argument(
@@ -136,7 +137,7 @@ def parse_args():
         help="The value of scale_loss for fp16.")
     parser.add_argument(
         "--use_dynamic_loss_scaling",
-        type=bool,
+        type=distutils.util.strtobool,
         default=True,
         help="Whether to use dynamic loss scaling.")
     args = parser.parse_args()
