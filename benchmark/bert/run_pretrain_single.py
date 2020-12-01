@@ -21,6 +21,7 @@ import time
 import h5py
 from functools import partial
 import numpy as np
+import distutils.util
 
 import paddle
 from paddle.io import DataLoader, Dataset
@@ -121,7 +122,7 @@ def parse_args():
         "--seed", type=int, default=42, help="Random seed for initialization")
     parser.add_argument(
         "--use_amp",
-        type=bool,
+        type=distutils.util.strtobool,
         default=False,
         help="Enable mixed precision training.")
     parser.add_argument(
