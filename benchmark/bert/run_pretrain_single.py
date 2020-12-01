@@ -265,10 +265,12 @@ def do_train(args):
                 # In the new 2.0 api, must call this function to change the learning_rate
                 lr_scheduler.step()
                 if global_step % args.logging_steps == 0:
+                    time_cost = time.time() - tic_train
                     print(
-                        "global step %d, epoch: %d, batch: %d, loss: %f, speed: %.2f step/s"
+                        "global step %d, epoch: %d, batch: %d, loss: %f, speed: %.2f step/s, ips :%.2f sequences/s"
                         % (global_step, epoch, step, loss_return[0],
-                           args.logging_steps / (time.time() - tic_train)))
+                           args.logging_steps / time_cost, 
+                           args.logging_steps * args.batch_size / time_cost))
                     tic_train = time.time()
                 if global_step % args.save_steps == 0:
                     output_dir = os.path.join(args.output_dir,
