@@ -227,8 +227,10 @@ def do_train(args):
             if not any(nd in n for nd in ["bias", "norm"])
         ])
     if args.use_amp:
+        amp_list = paddle.fluid.contrib.mixed_precision.AutoMixedPrecisionLists(custom_white_list=['layer_norm', 'softmax'])
         optimizer = paddle.fluid.contrib.mixed_precision.decorate(
             optimizer,
+            amp_list,
             init_loss_scaling=args.scale_loss,
             use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
     optimizer.minimize(loss)
