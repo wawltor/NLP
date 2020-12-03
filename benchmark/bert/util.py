@@ -37,39 +37,71 @@ def create_pretraining_dataset(input_file,
         input_file=input_file, max_pred_length=max_pred_length)
     train_batch_sampler = paddle.io.DistributedBatchSampler(
         train_data, batch_size=args.batch_size, shuffle=True)
-    train_data_loader = DataLoader(
-        dataset=train_data,
-        places=places,
-        feed_list=data_holders,
-        batch_sampler=train_batch_sampler,
-        collate_fn=Tuple(
-            Stack(),
-            Stack(),
-            Stack(),
-            Stack(),
-            Stack(),
-            lambda x, fn=Stack(dtype=np.float32): np.sum(fn(x), keepdims=True)),
-        num_workers=0,
-        worker_init_fn=worker_init,
-        return_list=False)
+
+    def _collate_data(data, stack_fn=Stack()):
+        num_fields = len(data[0])
+        out = [None] * num_fields
+        # input_ids, segment_ids, input_mask, masked_lm_positions,
+        # masked_lm_labels, next_sentence_labels, mask_token_num
+        for i in (0, 1, 2, 5):
+            out[i] = stack_fn([x[i] for x in data])
+        batch_size, seq_length = out[0].shape
+        size = num_mask = sum(len(x[3]) for x in data)
+        # Padding for divisibility by 8 for fp16 or int8 usage
+        if size % 8 != 0:
+            size += 8 - (size % 8)
+        # masked_lm_positions
+        # Organize as a 1D tensor for gather or use gather_nd
+        out[3] = np.full(size, 0, dtype=np.int64)
+        # masked_lm_labels
+        out[4] = np.full([size, 1], -1, dtype=np.int64)
+        mask_token_num = 0
+        for i, x in enumerate(data):
+            for j, pos in enumerate(x[3]):
+                out[3][mask_token_num] = i * seq_length + pos
+                out[4][mask_token_num] = x[4][j]
+                mask_token_num += 1
+        # mask_token_num
+        out.append(np.asarray([mask_token_num], dtype=np.float32))
+        return out
+
+    train_data_loader = DataLoader(dataset=train_data,
+                                   places=places,
+                                   feed_list=data_holders,
+                                   batch_sampler=train_batch_sampler,
+                                   collate_fn=_collate_data,
+                                   num_workers=0,
+                                   worker_init_fn=worker_init,
+                                   return_list=False)
     return train_data_loader, input_file
 
 
 def create_data_holder(args):
-    input_ids = paddle.static.data(
-        name="input_ids", shape=[-1, -1], dtype="int64")
-    segment_ids = paddle.static.data(
-        name="segment_ids", shape=[-1, -1], dtype="int64")
-    input_mask = paddle.static.data(
-        name="input_mask", shape=[-1, 1, 1, -1], dtype="int64")
-    masked_lm_labels = paddle.static.data(
-        name="masked_lm_labels", shape=[-1, -1, 1], dtype="int64")
-    next_sentence_labels = paddle.static.data(
-        name="next_sentence_labels", shape=[-1, 1], dtype="int64")
-    masked_lm_scale = paddle.static.data(
-        name="masked_lm_scale", shape=[-1, 1], dtype="float32")
-    return [input_ids, segment_ids, input_mask, masked_lm_labels, \
-            next_sentence_labels, masked_lm_scale]
+    input_ids = paddle.static.data(name="input_ids",
+                                   shape=[-1, -1],
+                                   dtype="int64")
+    segment_ids = paddle.static.data(name="segment_ids",
+                                     shape=[-1, -1],
+                                     dtype="int64")
+    input_mask = paddle.static.data(name="input_mask",
+                                    shape=[-1, 1, 1, -1],
+                                    dtype="float32")
+    masked_lm_positions = paddle.static.data(name="masked_lm_positions",
+                                             shape=[-1],
+                                             dtype="int64")
+    masked_lm_labels = paddle.static.data(name="masked_lm_labels",
+                                          shape=[-1, 1],
+                                          dtype="int64")
+    next_sentence_labels = paddle.static.data(name="next_sentence_labels",
+                                              shape=[-1, 1],
+                                              dtype="int64")
+    masked_lm_scale = paddle.static.data(name="masked_lm_scale",
+                                         shape=[-1, 1],
+                                         dtype="float32")
+    return [
+        input_ids, segment_ids, input_mask, masked_lm_positions,
+        masked_lm_labels, next_sentence_labels, masked_lm_scale
+    ]
 
 
 class WorkerInitObj(object):
@@ -107,21 +139,30 @@ class PretrainingDataset(Dataset):
             if indice < 5 else np.asarray(input[index].astype(np.int64))
             for indice, input in enumerate(self.inputs)
         ]
-        input_mask = np.reshape(input_mask, [1, 1, input_mask.shape[0]])
+        # TODO: whether to use reversed mask by changing 1s and 0s to be
+        # consistent with nv bert
+        input_mask = (1 - np.reshape(input_mask.astype(np.float32),
+                                     [1, 1, input_mask.shape[0]])) * -1e9
 
-        masked_lm_labels = np.full(input_ids.shape, -1, dtype=np.int64)
         index = self.max_pred_length
+        # store number of  masked tokens in index
+        # outputs of torch.nonzero diff with that of numpy.nonzero by zip
         padded_mask_indices = (masked_lm_positions == 0).nonzero()[0]
         if len(padded_mask_indices) != 0:
             index = padded_mask_indices[0].item()
             mask_token_num = index
         else:
-            mask_token_num = 0  # use this to perform average to avoid 0/0
-        masked_lm_labels[masked_lm_positions[:index]] = masked_lm_ids[:index]
+            index = 0
+            mask_token_num = 0
+        # masked_lm_labels = np.full(input_ids.shape, -1, dtype=np.int64)
+        # masked_lm_labels[masked_lm_positions[:index]] = masked_lm_ids[:index]
+        masked_lm_labels = masked_lm_ids[:index]
+        masked_lm_positions = masked_lm_positions[:index]
+        # softmax_with_cross_entropy enforce last dim size equal 1
         masked_lm_labels = np.expand_dims(masked_lm_labels, axis=-1)
         next_sentence_labels = np.expand_dims(next_sentence_labels, axis=-1)
 
         return [
-            input_ids, segment_ids, input_mask, masked_lm_labels,
-            next_sentence_labels, mask_token_num
+            input_ids, segment_ids, input_mask, masked_lm_positions,
+            masked_lm_labels, next_sentence_labels
         ]

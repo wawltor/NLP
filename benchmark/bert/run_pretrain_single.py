@@ -179,15 +179,18 @@ def do_train(args):
     paddle.enable_static()
     place = paddle.CUDAPlace(0)
 
-    # Set the random seed 
+    # Set the random seed
     set_seed(args)
 
     # Define the input data in the static mode
     main_program = paddle.static.default_main_program()
     startup_program = paddle.static.default_startup_program()
     data_holders = create_data_holder(args)
-    [input_ids, segment_ids, input_mask, masked_lm_labels, \
-            next_sentence_labels, masked_lm_scale] = data_holders
+    [
+        input_ids, segment_ids, input_mask, masked_lm_positions,
+        masked_lm_labels, next_sentence_labels, masked_lm_scale
+    ] = data_holders
+
 
     # Define the model structure in static mode
     args.model_type = args.model_type.lower()
@@ -201,7 +204,8 @@ def do_train(args):
     prediction_scores, seq_relationship_score = model(
         input_ids=input_ids,
         token_type_ids=segment_ids,
-        attention_mask=input_mask)
+        attention_mask=input_mask,
+        masked_positions=masked_lm_positions)
     loss = criterion(prediction_scores, seq_relationship_score,
                      masked_lm_labels, next_sentence_labels, masked_lm_scale)
 
@@ -272,7 +276,7 @@ def do_train(args):
                     print(
                         "global step %d, epoch: %d, batch: %d, loss: %f, speed: %.2f step/s, ips :%.2f sequences/s"
                         % (global_step, epoch, step, loss_return[0],
-                           args.logging_steps / time_cost, 
+                           args.logging_steps / time_cost,
                            args.logging_steps * args.batch_size / time_cost))
                     tic_train = time.time()
                 if global_step % args.save_steps == 0:
