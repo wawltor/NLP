@@ -389,7 +389,12 @@ class BertLMPredictionHead(Layer):
         self.decoder_bias = self.create_parameter(
             shape=[vocab_size], dtype=self.decoder_weight.dtype, is_bias=True)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, masked_positions=None):
+        if masked_positions is not None:
+            hidden_states = paddle.reshape(hidden_states,
+                                           [-1, hidden_states.shape[-1]])
+            hidden_states = paddle.tensor.gather(hidden_states,
+                                                 masked_positions)
         # gather masked tokens might be more quick
         hidden_states = self.transform(hidden_states)
         hidden_states = self.activation(hidden_states)
@@ -411,8 +416,8 @@ class BertPreTrainingHeads(Layer):
                                                 activation, embedding_weights)
         self.seq_relationship = nn.Linear(hidden_size, 2)
 
-    def forward(self, sequence_output, pooled_output):
-        prediction_scores = self.predictions(sequence_output)
+    def forward(self, sequence_output, pooled_output, masked_positions=None):
+        prediction_scores = self.predictions(sequence_output, masked_positions)
         seq_relationship_score = self.seq_relationship(pooled_output)
         return prediction_scores, seq_relationship_score
 
@@ -433,15 +438,16 @@ class BertForPreTraining(BertPretrainedModel):
                 input_ids,
                 token_type_ids=None,
                 position_ids=None,
-                attention_mask=None):
+                attention_mask=None,
+                masked_positions=None):
         outputs = self.bert(
             input_ids,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
             attention_mask=attention_mask)
         sequence_output, pooled_output = outputs[:2]
-        prediction_scores, seq_relationship_score = self.cls(sequence_output,
-                                                             pooled_output)
+        prediction_scores, seq_relationship_score = self.cls(
+            sequence_output, pooled_output, masked_positions)
         return prediction_scores, seq_relationship_score
 
 
