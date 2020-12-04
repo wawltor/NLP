@@ -14,7 +14,6 @@
 
 import argparse
 import collections
-import distutils.util
 import itertools
 import os
 import random
