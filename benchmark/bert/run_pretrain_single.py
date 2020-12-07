@@ -21,6 +21,7 @@ import time
 import h5py
 from functools import partial
 import numpy as np
+import distutils.util
 
 import paddle
 from paddle.io import DataLoader, Dataset
@@ -119,6 +120,26 @@ def parse_args():
         help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for initialization")
+    parser.add_argument(
+        "--use_amp",
+        type=distutils.util.strtobool,
+        default=False,
+        help="Enable mixed precision training.")
+    parser.add_argument(
+        "--enable_addto",
+        type=distutils.util.strtobool,
+        default=False,
+        help="Whether to enable the addto strategy for gradient accumulation or not. This is only used for AMP training.")
+    parser.add_argument(
+        "--scale_loss",
+        type=float,
+        default=1.0,
+        help="The value of scale_loss for fp16.")
+    parser.add_argument(
+        "--use_dynamic_loss_scaling",
+        type=distutils.util.strtobool,
+        default=True,
+        help="Whether to use dynamic loss scaling.")
     args = parser.parse_args()
     return args
 
@@ -128,6 +149,7 @@ def construct_compiled_program(main_program, loss):
     exec_strategy.num_threads = 1
     exec_strategy.num_iteration_per_drop_scope = 10000
     build_strategy = paddle.static.BuildStrategy()
+    build_strategy.enable_addto = args.enable_addto
     main_program = paddle.static.CompiledProgram(
         main_program).with_data_parallel(
             loss_name=loss.name,
@@ -157,28 +179,33 @@ def do_train(args):
     paddle.enable_static()
     place = paddle.CUDAPlace(0)
 
-    # Set the random seed 
+    # Set the random seed
     set_seed(args)
 
     # Define the input data in the static mode
     main_program = paddle.static.default_main_program()
     startup_program = paddle.static.default_startup_program()
     data_holders = create_data_holder(args)
-    [input_ids, segment_ids, input_mask, masked_lm_labels, \
-            next_sentence_labels, masked_lm_scale] = data_holders
+    [
+        input_ids, segment_ids, input_mask, masked_lm_positions,
+        masked_lm_labels, next_sentence_labels, masked_lm_scale
+    ] = data_holders
+
 
     # Define the model structure in static mode
     args.model_type = args.model_type.lower()
     model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-    model = BertForPreTraining(
-        BertModel(**model_class.pretrained_init_configuration[
-            args.model_name_or_path]))
+    config = model_class.pretrained_init_configuration[args.model_name_or_path]
+    if config["vocab_size"] % 8 != 0:
+        config["vocab_size"] += 8 - (config["vocab_size"] % 8)
+    model = BertForPreTraining(BertModel(**config))
     criterion = BertPretrainingCriterion(model.bert.config["vocab_size"])
     prediction_scores, seq_relationship_score = model(
         input_ids=input_ids,
         token_type_ids=segment_ids,
-        attention_mask=input_mask)
+        attention_mask=input_mask,
+        masked_positions=masked_lm_positions)
     loss = criterion(prediction_scores, seq_relationship_score,
                      masked_lm_labels, next_sentence_labels, masked_lm_scale)
 
@@ -203,6 +230,13 @@ def do_train(args):
             p.name for n, p in model.named_parameters()
             if not any(nd in n for nd in ["bias", "norm"])
         ])
+    if args.use_amp:
+        amp_list = paddle.fluid.contrib.mixed_precision.AutoMixedPrecisionLists(custom_white_list=['layer_norm', 'softmax'])
+        optimizer = paddle.fluid.contrib.mixed_precision.decorate(
+            optimizer,
+            amp_list,
+            init_loss_scaling=args.scale_loss,
+            use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
     optimizer.minimize(loss)
 
     # Define the Executor for running the static model
@@ -238,10 +272,12 @@ def do_train(args):
                 # In the new 2.0 api, must call this function to change the learning_rate
                 lr_scheduler.step()
                 if global_step % args.logging_steps == 0:
+                    time_cost = time.time() - tic_train
                     print(
-                        "global step %d, epoch: %d, batch: %d, loss: %f, speed: %.2f step/s"
+                        "global step %d, epoch: %d, batch: %d, loss: %f, speed: %.2f step/s, ips :%.2f sequences/s"
                         % (global_step, epoch, step, loss_return[0],
-                           args.logging_steps / (time.time() - tic_train)))
+                           args.logging_steps / time_cost,
+                           args.logging_steps * args.batch_size / time_cost))
                     tic_train = time.time()
                 if global_step % args.save_steps == 0:
                     output_dir = os.path.join(args.output_dir,

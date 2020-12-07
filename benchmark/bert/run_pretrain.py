@@ -169,8 +169,11 @@ def do_train(args):
     # Define the input data in the static mode
     data_holders = create_data_holder(args)
 
-    [input_ids, segment_ids, input_mask, masked_lm_labels, \
-            next_sentence_labels, masked_lm_scale] = data_holders
+    [
+        input_ids, segment_ids, input_mask, masked_lm_positions,
+        masked_lm_labels, next_sentence_labels, masked_lm_scale
+    ] = data_holders
+
 
     # Define the model structure in static mode
     args.model_type = args.model_type.lower()
@@ -183,7 +186,8 @@ def do_train(args):
     prediction_scores, seq_relationship_score = model(
         input_ids=input_ids,
         token_type_ids=segment_ids,
-        attention_mask=input_mask)
+        attention_mask=input_mask,
+        masked_positions=masked_lm_positions)
     loss = criterion(prediction_scores, seq_relationship_score,
                      masked_lm_labels, next_sentence_labels, masked_lm_scale)
 
