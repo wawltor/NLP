@@ -271,7 +271,8 @@ class BertModel(BertPretrainedModel):
                 input_ids,
                 token_type_ids=None,
                 position_ids=None,
-                attention_mask=None):
+                attention_mask=None,
+                use_pure_fp16=False):
         if attention_mask is None:
             attention_mask = paddle.unsqueeze(
                 (input_ids == self.pad_token_id
@@ -281,6 +282,9 @@ class BertModel(BertPretrainedModel):
             input_ids=input_ids,
             position_ids=position_ids,
             token_type_ids=token_type_ids)
+        if use_pure_fp16:
+            attention_mask = paddle.cast(attention_mask, "float16")
+            embedding_output = paddle.cast(embedding_output, "float16")
         encoder_outputs = self.encoder(embedding_output, attention_mask)
         sequence_output = encoder_outputs
         pooled_output = self.pooler(sequence_output)
@@ -333,12 +337,14 @@ class BertForSequenceClassification(BertPretrainedModel):
                 input_ids,
                 token_type_ids=None,
                 position_ids=None,
-                attention_mask=None):
+                attention_mask=None,
+                use_pure_fp16=False):
         _, pooled_output = self.bert(
             input_ids,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
-            attention_mask=attention_mask)
+            attention_mask=attention_mask,
+            use_pure_fp16=use_pure_fp16)
 
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)

@@ -92,11 +92,12 @@ class Pad(object):
                 [8. 2. 0. 0.]]
             '''
      """
-    def __init__(self, pad_val=0, axis=0, ret_length=None, dtype=None):
+    def __init__(self, pad_val=0, axis=0, ret_length=None, dtype=None, use_tensor_core=False):
         self._pad_val = pad_val
         self._axis = axis
         self._ret_length = ret_length
         self._dtype = dtype
+        self._use_tensor_core = use_tensor_core
 
     def __call__(self, data):
         """
@@ -116,6 +117,8 @@ class Pad(object):
         arrs = [np.asarray(ele) for ele in data]
         original_length = [ele.shape[self._axis] for ele in arrs]
         max_size = max(original_length)
+        if self._use_tensor_core and max_size % 8 != 0:
+            max_size = (int(max_size / 8) + 1) * 8
         ret_shape = list(arrs[0].shape)
         ret_shape[self._axis] = max_size
         ret_shape = (len(arrs), ) + tuple(ret_shape)
