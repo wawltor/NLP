@@ -338,6 +338,7 @@ def do_train(args):
             num_classes=len(train_dataset.get_labels()))
         loss_fct = paddle.nn.loss.CrossEntropyLoss(
         ) if train_dataset.get_labels() else paddle.nn.loss.MSELoss()
+        seq_len = paddle.shape(input_ids)[1]
         logits = model(input_ids, segment_ids)
         loss = loss_fct(logits, labels)
         dev_program = main_program.clone(for_test=True)
@@ -365,8 +366,10 @@ def do_train(args):
                if not any(nd in n for nd in ["bias", "norm"])
         ])
         if args.use_fp16:
+            amp_list = fluid.contrib.mixed_precision.AutoMixedPrecisionLists(custom_white_list=['layer_norm', 'softmax'])
             optimizer = paddle.fluid.contrib.mixed_precision.decorate(
                 optimizer,
+                amp_lists=amp_list,
                 init_loss_scaling=args.scale_loss,
                 use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
         optimizer.minimize(loss)
@@ -387,18 +390,43 @@ def do_train(args):
                                                 pretrained_state_dict)
     paddle.static.set_program_state(main_program, reset_state_dict)
 
+    exec_strategy = fluid.ExecutionStrategy()
+    exec_strategy.num_threads = 1
+    exec_strategy.num_iteration_per_drop_scope = 10000
+
+    build_strategy = fluid.BuildStrategy()
+
+    main_program = fluid.CompiledProgram(main_program).with_data_parallel(
+        loss_name=loss.name,
+        exec_strategy=exec_strategy,
+        build_strategy=build_strategy)
+
     global_step = 0
+    processed_words_len = 0.0
     tic_train = time.time()
     for epoch in range(args.num_train_epochs):
         for step, batch in enumerate(train_data_loader):
             global_step += 1
-            loss_return = exe.run(main_program, feed=batch, fetch_list=[loss])
+            """
+            if step == 200:
+                # profiler.start_profiler("All")
+                fluid.core.nvprof_start()
+            if step == 210:
+                fluid.core.nvprof_stop()
+                # profiler.stop_profiler("total", "./profile")
+                return
+            """
+            loss_return = exe.run(main_program, feed=batch, fetch_list=[loss, seq_len])
+            processed_words_len += loss_return[1]
             if global_step % args.logging_steps == 0:
+                log_time = time.time() - tic_train
                 logger.info(
-                    "global step %d, epoch: %d, batch: %d, loss: %f, speed: %.2f step/s"
+                    "global step %d, epoch: %d, batch: %d, loss: %f, speed: %.2f step/s, thoughput: %.2f words/s"
                     % (global_step, epoch, step, loss_return[0],
-                       args.logging_steps / (time.time() - tic_train)))
+                       args.logging_steps / log_time, 
+                       processed_words_len / log_time))
                 tic_train = time.time()
+                processed_words_len = 0.0
             lr_scheduler.step()
             if global_step % args.save_steps == 0:
                 # Validation pass, record the loss and metric 
