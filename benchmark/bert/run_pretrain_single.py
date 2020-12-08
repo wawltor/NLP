@@ -22,6 +22,7 @@ import h5py
 from functools import partial
 import numpy as np
 import distutils.util
+import sys
 
 import paddle
 from paddle.io import DataLoader, Dataset
@@ -140,6 +141,11 @@ def parse_args():
         type=distutils.util.strtobool,
         default=True,
         help="Whether to use dynamic loss scaling.")
+    parser.add_argument(
+        "--gradient_merge_steps",
+        type=int,
+        default=1,
+        help="Update parameters every x steps.")
     args = parser.parse_args()
     return args
 
@@ -237,6 +243,10 @@ def do_train(args):
             amp_list,
             init_loss_scaling=args.scale_loss,
             use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
+    if args.gradient_merge_steps > 1:
+        print('use gradient merge')
+        optimizer = paddle.fluid.optimizer.GradientMergeOptimizer(optimizer, k_steps=args.gradient_merge_steps, avg=False)
+
     optimizer.minimize(loss)
 
     # Define the Executor for running the static model
@@ -270,7 +280,8 @@ def do_train(args):
                     feed=batch,
                     fetch_list=[loss])
                 # In the new 2.0 api, must call this function to change the learning_rate
-                lr_scheduler.step()
+                if global_step % args.gradient_merge_steps == 0:
+                    lr_scheduler.step()
                 if global_step % args.logging_steps == 0:
                     time_cost = time.time() - tic_train
                     print(

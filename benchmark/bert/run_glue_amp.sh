@@ -1,4 +1,5 @@
 export CUDA_VISIBLE_DEVICES=0
+export export PYTHONPATH=/Paddle/NLP
 export TASK_NAME=SST-2
 
 python -u ./run_glue.py \
@@ -15,3 +16,4 @@ python -u ./run_glue.py \
     --use_fp16=true \
     --scale_loss=128.0 \
     --use_dynamic_loss_scaling=true \
+    --use_amp=true \
