@@ -140,6 +140,11 @@ def parse_args():
         type=distutils.util.strtobool,
         default=True,
         help="Whether to use dynamic loss scaling.")
+    parser.add_argument(
+        "--use_pure_fp16",
+        type=distutils.util.strtobool,
+        default=False,
+        help="Whether to use pure fp16 training.")
     args = parser.parse_args()
     return args
 
@@ -221,22 +226,20 @@ def do_train(args):
             float(num_training_steps - current_step) / float(
                 max(1, num_training_steps - num_warmup_steps))))
 
-    optimizer = paddle.optimizer.AdamW(
-        learning_rate=lr_scheduler,
-        epsilon=args.adam_epsilon,
-        parameters=model.parameters(),
-        weight_decay=args.weight_decay,
-        apply_decay_param_fun=lambda x: x in [
-            p.name for n, p in model.named_parameters()
-            if not any(nd in n for nd in ["bias", "norm"])
-        ])
+    optimizer = paddle.fluid.contrib.optimizer.Momentum(
+            learning_rate=0.001,
+            momentum=0.9,
+            regularization=paddle.fluid.regularizer.L2Decay(1e-4),
+            multi_precision=args.use_pure_fp16,
+            rescale_grad=1.0)
     if args.use_amp:
         amp_list = paddle.fluid.contrib.mixed_precision.AutoMixedPrecisionLists(custom_white_list=['layer_norm', 'softmax'])
         optimizer = paddle.fluid.contrib.mixed_precision.decorate(
             optimizer,
             amp_list,
             init_loss_scaling=args.scale_loss,
-            use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
+            use_dynamic_loss_scaling=args.use_dynamic_loss_scaling,
+            use_pure_fp16=args.use_pure_fp16)
     optimizer.minimize(loss)
 
     # Define the Executor for running the static model
@@ -247,6 +250,8 @@ def do_train(args):
     # Use the state dict to update the parameter
     reset_state_dict = reset_program_state_dict(model, state_dict)
     paddle.static.set_program_state(main_program, reset_state_dict)
+    if args.use_amp:
+        optimizer.amp_init(place, paddle.static.global_scope())
     # Construct the compiled program
     main_program = construct_compiled_program(main_program, loss)
     global_step = 0
