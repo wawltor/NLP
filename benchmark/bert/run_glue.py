@@ -27,6 +27,8 @@ from paddlenlp.datasets import SimpleDataset, GlueQNLI, GlueSST2
 from paddlenlp.data.batchify import Stack, Tuple, Pad
 from paddlenlp.transformers import BertForSequenceClassification, BertTokenizer
 
+import paddle.fluid as fluid
+
 FORMAT = '%(asctime)s-%(levelname)s: %(message)s'
 logging.basicConfig(level=logging.INFO, format=FORMAT)
 logger = logging.getLogger(__name__)
@@ -131,6 +133,21 @@ def parse_args():
         help="Save checkpoint every X updates steps.")
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for initialization")
+    parser.add_argument(
+        "--use_fp16",
+        type=bool,
+        default=False,
+        help="Whether to enable half precision training with fp16.")
+    parser.add_argument(
+        "--scale_loss",
+        type=float,
+        default=1.0,
+        help="The value of scale_loss for fp16.")
+    parser.add_argument(
+        "--use_dynamic_loss_scaling",
+        type=bool,
+        default=True,
+        help="Whether to use dynamic loss scaling.")
     args = parser.parse_args()
     return args
 
@@ -347,10 +364,16 @@ def do_train(args):
                 p.name for n, p in model.named_parameters()
                if not any(nd in n for nd in ["bias", "norm"])
         ])
+        if args.use_fp16:
+            optimizer = paddle.fluid.contrib.mixed_precision.decorate(
+                optimizer,
+                init_loss_scaling=args.scale_loss,
+                use_dynamic_loss_scaling=args.use_dynamic_loss_scaling)
         optimizer.minimize(loss)
 
     # Create the metric pass for the validation
     with paddle.static.program_guard(dev_program, startup_program):
+        logits = paddle.fluid.layers.cast(logits, 'float32')
         metric = metric_class()
         correct = metric.compute(logits, labels)
 
@@ -363,6 +386,17 @@ def do_train(args):
     reset_state_dict = reset_program_state_dict(model, state_dict,
                                                 pretrained_state_dict)
     paddle.static.set_program_state(main_program, reset_state_dict)
+
+    exec_strategy = fluid.ExecutionStrategy()
+    exec_strategy.num_threads = 1
+    exec_strategy.num_iteration_per_drop_scope = 10000
+
+    build_strategy = fluid.BuildStrategy()
+
+    main_program = fluid.CompiledProgram(main_program).with_data_parallel(
+        loss_name=loss.name,
+        exec_strategy=exec_strategy,
+        build_strategy=build_strategy)
 
     global_step = 0
     tic_train = time.time()

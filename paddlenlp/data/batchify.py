@@ -44,6 +44,7 @@ class Stack(object):
              [8 9 1 2]]
              '''
     """
+
     def __init__(self, axis=0, dtype=None):
         self._axis = axis
         self._dtype = dtype
@@ -56,8 +57,10 @@ class Stack(object):
         Returns:
             numpy.ndarray: Stacked batch data.
         """
-        data = np.stack(data, axis=self._axis).astype(
-            self._dtype) if self._dtype else np.stack(data, axis=self._axis)
+        data = np.stack(
+            data,
+            axis=self._axis).astype(self._dtype) if self._dtype else np.stack(
+                data, axis=self._axis)
         return data
 
 
@@ -92,6 +95,7 @@ class Pad(object):
                 [8. 2. 0. 0.]]
             '''
      """
+
     def __init__(self, pad_val=0, axis=0, ret_length=None, dtype=None):
         self._pad_val = pad_val
         self._axis = axis
@@ -116,6 +120,8 @@ class Pad(object):
         arrs = [np.asarray(ele) for ele in data]
         original_length = [ele.shape[self._axis] for ele in arrs]
         max_size = max(original_length)
+        if max_size % 8 != 0:
+            max_size = (int(max_size / 8) + 1) * 8
         ret_shape = list(arrs[0].shape)
         ret_shape[self._axis] = max_size
         ret_shape = (len(arrs), ) + tuple(ret_shape)
@@ -160,6 +166,7 @@ class Tuple(object):
             from paddle.incubate.hapi.text.data_utils import Tuple, Pad, Stack
             batchify_fn = Tuple(Pad(axis=0, pad_val=0), Stack())
     """
+
     def __init__(self, fn, *args):
         if isinstance(fn, (list, tuple)):
             assert len(args) == 0, 'Input pattern not understood. The input of Tuple can be ' \
